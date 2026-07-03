@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+РўРЎРљ-РіСЂСѓРїРї вЂ” Р‘РѕС‚ СЃ РїР°СЂСЃРёРЅРіРѕРј СЃР°Р№С‚Р°
+РџР°СЂСЃРёС‚ etsk.ru 2 СЂР°Р·Р° РІ РґРµРЅСЊ, РѕС‚РІРµС‡Р°РµС‚ РЅР° РІРѕРїСЂРѕСЃС‹ РєР»РёРµРЅС‚РѕРІ
+"""
+
+from playwright.sync_api import sync_playwright
+import anthropic
+import json
+import re
+import time
+import schedule
+import threading
+from datetime import datetime
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+client = anthropic.Anthropic()
+
+# РҐСЂР°РЅРёР»РёС‰Рµ Р°РєС‚СѓР°Р»СЊРЅС‹С… РґР°РЅРЅС‹С…
+site_data = {
+    "last_updated": None,
+    "РќРЈ": {"Р°РєС†РёРё": [], "С‚РѕРІР°СЂС‹": [], "Р±РѕРЅСѓСЃ": ""},
+    "РҐРњ": {"Р°РєС†РёРё": [], "С‚РѕРІР°СЂС‹": [], "Р±РѕРЅСѓСЃ": ""},
+    "Р•РљР‘": {"Р°РєС†РёРё": [], "С‚РѕРІР°СЂС‹": [], "Р±РѕРЅСѓСЃ": ""},
+}
+
+SITES = {
+    "РќРЈ": "https://urengoy.etsk.ru",
+    "РҐРњ": "https://kh-m.etsk.ru",
+    "Р•РљР‘": "https://etsk.ru",
+}
+
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+# РџРђР РЎРРќР“ РЎРђР™РўРђ
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+
+def parse_site():
+    """РџР°СЂСЃРёС‚ РІСЃРµ С‚СЂРё СЃР°Р№С‚Р° Рё РѕР±РЅРѕРІР»СЏРµС‚ РґР°РЅРЅС‹Рµ"""
+    print(f"\nрџ”„ РћР±РЅРѕРІР»СЏСЋ РґР°РЅРЅС‹Рµ... {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            locale="ru-RU",
+        )
+        page = ctx.new_page()
+
+        for city, base_url in SITES.items():
+            print(f"\nрџЏ™пёЏ {city}...")
+            try:
+                # РђРєС†РёРё
+                page.goto(f"{base_url}/sale/", timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                Р°РєС†РёРё_С‚РµРєСЃС‚ = page.inner_text("body")[:3000]
+
+                # Р‘РѕРЅСѓСЃРЅР°СЏ РїСЂРѕРіСЂР°РјРјР°
+                page.goto(f"{base_url}/bonus/", timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2000)
+                Р±РѕРЅСѓСЃ_С‚РµРєСЃС‚ = page.inner_text("body")[:2000]
+
+                site_data[city]["Р°РєС†РёРё"] = Р°РєС†РёРё_С‚РµРєСЃС‚
+                site_data[city]["Р±РѕРЅСѓСЃ"] = Р±РѕРЅСѓСЃ_С‚РµРєСЃС‚
+                print(f"  вњ… {city} РѕР±РЅРѕРІР»С‘РЅ")
+
+            except Exception as e:
+                print(f"  вљ пёЏ {city}: {e}")
+
+        browser.close()
+
+    site_data["last_updated"] = datetime.now().strftime('%d.%m.%Y %H:%M')
+    print(f"\nвњ… Р’СЃРµ РґР°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹: {site_data['last_updated']}")
+
+
+def make_system_prompt(city):
+    """РЎРѕР±РёСЂР°РµС‚ РїСЂРѕРјРїС‚ СЃ Р°РєС‚СѓР°Р»СЊРЅС‹РјРё РґР°РЅРЅС‹РјРё"""
+    c_data = site_data.get(city, {})
+    base_url = SITES.get(city, "etsk.ru")
+    last = site_data.get("last_updated", "РµС‰С‘ РЅРµ РѕР±РЅРѕРІР»СЏР»РёСЃСЊ")
+
+    return f"""РўС‹ вЂ” РїРѕРјРѕС‰РЅРёРє РёРЅС‚РµСЂРЅРµС‚-РјР°РіР°Р·РёРЅР° РўРЎРљ-РіСЂСѓРїРї ({city}).
+Р”Р°РЅРЅС‹Рµ РѕР±РЅРѕРІР»РµРЅС‹: {last}
+
+РђРљРўРЈРђР›Р¬РќР«Р• РђРљР¦РР РЎ РЎРђР™РўРђ:
+{c_data.get('Р°РєС†РёРё', 'Р—Р°РіСЂСѓР¶Р°СЋ...')}
+
+Р‘РћРќРЈРЎРќРђРЇ РџР РћР“Р РђРњРњРђ РЎ РЎРђР™РўРђ:
+{c_data.get('Р±РѕРЅСѓСЃ', 'Р—Р°РіСЂСѓР¶Р°СЋ...')}
+
+РџР РђР’РР›Рђ:
+- РћС‚РІРµС‡Р°Р№ С‚РѕР»СЊРєРѕ РЅР° РѕСЃРЅРѕРІРµ РґР°РЅРЅС‹С… РІС‹С€Рµ
+- Р”Р»СЏ РїРѕРёСЃРєР° РєРѕРЅРєСЂРµС‚РЅС‹С… С‚РѕРІР°СЂРѕРІ РёСЃРїРѕР»СЊР·СѓР№ web_search: site:{base_url.replace('https://', '')} [С‚РѕРІР°СЂ]
+- РђСЂС‚РёРєСѓР»С‹ Р±РµСЂС‘С€СЊ С‚РѕР»СЊРєРѕ СЃ СЃР°Р№С‚Р° (РІРёРґ РљРђ-XXXXXXXX)
+- РћС‚РІРµС‡Р°Р№ РєРѕСЂРѕС‚РєРѕ Рё РїРѕ РґРµР»Сѓ
+- РўРµР»РµС„РѕРЅ: {'+7 (3494) 91-70-70' if city == 'РќРЈ' else '+7 (3467) 93-91-96' if city == 'РҐРњ' else '+7 (343) 382-12-12'}
+- Email: im.sale@etsk.ru"""
+
+
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+# API ENDPOINT
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    data = request.json
+    message = data.get('message', '')
+    city = data.get('city', 'Р•РљР‘')
+    history = data.get('history', [])
+
+    messages = history + [{"role": "user", "content": message}]
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1000,
+        system=make_system_prompt(city),
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=messages,
+    )
+
+    reply = " ".join(b.text for b in response.content if hasattr(b, 'text'))
+    return jsonify({"reply": reply})
+
+
+@app.route('/status', methods=['GET'])
+def status():
+    return jsonify({
+        "last_updated": site_data["last_updated"],
+        "status": "ok"
+    })
+
+
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+# Р РђРЎРџРРЎРђРќРР• РџРђР РЎРРќР“Рђ
+# в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+
+def run_scheduler():
+    schedule.every().day.at("08:00").do(parse_site)
+    schedule.every().day.at("20:00").do(parse_site)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
+if __name__ == '__main__':
+    # РџРµСЂРІС‹Р№ РїР°СЂСЃРёРЅРі РїСЂРё Р·Р°РїСѓСЃРєРµ
+    parse_site()
+
+    # Р—Р°РїСѓСЃРєР°РµРј СЂР°СЃРїРёСЃР°РЅРёРµ РІ С„РѕРЅРµ
+    t = threading.Thread(target=run_scheduler, daemon=True)
+    t.start()
+
+    # Р—Р°РїСѓСЃРєР°РµРј СЃРµСЂРІРµСЂ
+    app.run(host='0.0.0.0', port=8080)
